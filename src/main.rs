@@ -4,7 +4,7 @@ mod widgets;
 
 use crate::event::{Event, Events};
 use spotify::SpotifyClient;
-use std::{error::Error, io};
+use std::{error::Error, fmt::Display, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -38,13 +38,23 @@ struct App {
 }
 
 struct Track {
+    /// Track title
     name: String,
+    /// Track artist
+    artist: String,
+    /// Track URI
     uri: String,
 }
 
+impl Display for Track {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} - {}", self.name, self.artist)
+    }
+}
+
 impl Track {
-    fn new(name: String, uri: String) -> Self {
-        Self { name, uri }
+    fn new(name: String, artist: String, uri: String) -> Self {
+        Self { name, artist, uri }
     }
 }
 
@@ -94,7 +104,13 @@ impl App {
                     .await
                     .clone()
                     .into_iter()
-                    .map(|track| Track::new(track.name, track.uri))
+                    .map(|track| {
+                        Track::new(
+                            track.name,
+                            track.artists.first().unwrap().name.clone(),
+                            track.uri,
+                        )
+                    })
                     .collect()
             }
             Command::Play(query) => {
@@ -176,7 +192,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .iter()
                 .enumerate()
                 .map(|(i, m)| {
-                    let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m.name)))];
+                    let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
                     ListItem::new(content)
                 })
                 .collect();
