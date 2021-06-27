@@ -11,6 +11,7 @@ Commands currently available are:
 ```text
 search <query> //searches spotify for the query and returns a list of results
 play <query> //searches spotify for the query and plays the first result without displaying them
+library //fetches the user's saved songs
 ```
 When not in input mode, use arrows up and down to select tracks in the results list and press enter to play them
 
