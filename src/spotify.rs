@@ -50,6 +50,7 @@ impl SpotifyClient {
         }
     }
 
+    // TODO: Implement paging instead of fetching all tracks at once
     pub async fn get_library(&self) -> Vec<FullTrack> {
         let mut library = vec![];
         let mut offset = 0;
