@@ -1,4 +1,6 @@
 mod event;
+mod spotify;
+mod widgets;
 
 use crate::event::{Event, Events};
 use std::{error::Error, io};
@@ -7,16 +9,14 @@ use tui::{
     backend::TermionBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Span, Spans, Text},
+    text::{Span, Spans},
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Terminal,
 };
 use unicode_width::UnicodeWidthStr;
 
-use dotenv;
 use rspotify::client::Spotify;
-use rspotify::oauth2::{SpotifyClientCredentials, SpotifyOAuth};
-use rspotify::util::get_token;
+use widgets::StatefulList;
 
 enum InputMode {
     Normal,
@@ -29,9 +29,23 @@ struct App {
     input: String,
     /// Current input mode
     input_mode: InputMode,
-    /// History of recorded messages
-    messages: Vec<String>,
+    /// Search results
+    results: StatefulList<Track>,
+    /// Currently playing song
     np: String,
+    /// Spotify client
+    spotify: Option<Spotify>,
+}
+
+struct Track {
+    name: String,
+    uri: String,
+}
+
+impl Track {
+    fn new(name: String, uri: String) -> Self {
+        Self { name, uri }
+    }
 }
 
 impl Default for App {
@@ -39,49 +53,81 @@ impl Default for App {
         App {
             input: String::new(),
             input_mode: InputMode::Normal,
-            messages: Vec::new(),
+            results: StatefulList::new(),
             np: String::new(),
+            spotify: None,
         }
     }
 }
 
-async fn handle_command(client: &Spotify, command: String) {
-    let command: Vec<&str> = command.as_str().split_whitespace().collect();
-    let prefix = command[0];
-    match prefix {
-        "search" => println!(
-            "{:?}",
-            client
-                .search(
-                    command[1],
-                    rspotify::senum::SearchType::Track,
-                    None,
-                    None,
-                    None,
-                    None
-                )
-                .await
-                .unwrap()
-        ),
-        _ => {}
+enum Command {
+    Unknown,
+    Search(String),
+}
+
+impl From<String> for Command {
+    fn from(command: String) -> Self {
+        let command = command.as_str().split_once(' ').unwrap();
+        let prefix = command.0;
+        match prefix {
+            "search" => Self::Search(String::from(command.1)),
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl App {
+    async fn handle_command(&mut self) {
+        match Command::from(self.input.drain(..).collect::<String>()) {
+            Command::Unknown => {}
+            Command::Search(query) => println!(
+                "{:?}",
+                if let rspotify::model::search::SearchResult::Tracks(page) = &self
+                    .spotify
+                    .as_ref()
+                    .unwrap()
+                    .search(
+                        &query,
+                        rspotify::senum::SearchType::Track,
+                        Some(20),
+                        None,
+                        None,
+                        None
+                    )
+                    .await
+                    .unwrap()
+                {
+                    self.results.items = page
+                        .items
+                        .clone()
+                        .into_iter()
+                        .map(|track| Track::new(track.name, track.uri))
+                        .collect();
+                } else {
+                    {}
+                }
+            ),
+        }
+    }
+
+    async fn play(&self) {
+        self.spotify
+            .as_ref()
+            .unwrap()
+            .start_playback(
+                None,
+                None,
+                Some(vec![self.results.get_selection().uri.clone()]),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    dotenv::dotenv().ok();
-
-    let mut oauth = SpotifyOAuth::default()
-        .client_id(&dotenv::var("RSPOTIFY_CLIENT_ID").unwrap())
-        .client_secret(&dotenv::var("RSPOTIFY_CLIENT_SECRET").unwrap())
-        .redirect_uri(&dotenv::var("RSPOTIFY_REDIRECT_URI").unwrap())
-        .scope("app-remote-control streaming user-library-read user-read-currently-playing user-read-playback-state user-read-playback-position playlist-read-collaborative playlist-read-private user-library-modify user-modify-playback-state")
-        .build();
-
-    let token = rspotify::util::get_token(&mut oauth).await.unwrap();
-
-    let client = Spotify::default().access_token(&token.access_token);
-
     // Terminal initialization
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
@@ -94,6 +140,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Create default app state
     let mut app = App::default();
+    app.spotify = Some(spotify::get_spotify_client().await);
 
     loop {
         // Draw UI
@@ -118,7 +165,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let input = Paragraph::new(app.input.as_ref())
                 .style(match app.input_mode {
                     InputMode::Normal => Style::default(),
-                    InputMode::Editing => Style::default().fg(Color::Yellow),
+                    InputMode::Editing => Style::default().fg(Color::LightGreen),
                 })
                 .block(Block::default().borders(Borders::ALL).title("Input"));
             f.render_widget(input, chunks[2]);
@@ -138,18 +185,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            let messages: Vec<ListItem> = app
-                .messages
+            let list: Vec<ListItem> = app
+                .results
+                .items
                 .iter()
                 .enumerate()
                 .map(|(i, m)| {
-                    let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+                    let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m.name)))];
                     ListItem::new(content)
                 })
                 .collect();
-            let messages =
-                List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
-            f.render_widget(messages, chunks[1]);
+            let results = List::new(list)
+                .block(Block::default().borders(Borders::ALL).title("Tracks"))
+                .highlight_style(
+                    Style::default()
+                        .bg(Color::LightGreen)
+                        .add_modifier(Modifier::BOLD),
+                )
+                //.highlight_symbol(">> ")
+                ;
+
+            f.render_stateful_widget(results, chunks[1], &mut app.results.state);
         })?;
 
         // Handle input
@@ -159,14 +215,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Key::Char('h') => {
                         app.input_mode = InputMode::Editing;
                     }
+                    Key::Down => {
+                        app.results.next();
+                    }
+                    Key::Up => {
+                        app.results.previous();
+                    }
                     Key::Char('q') => {
                         break;
+                    }
+                    Key::Char('\n') => {
+                        app.play().await;
                     }
                     _ => {}
                 },
                 InputMode::Editing => match input {
                     Key::Char('\n') => {
-                        handle_command(&client, app.input.drain(..).collect()).await;
+                        app.handle_command().await;
                         app.input_mode = InputMode::Normal;
                     }
                     Key::Char(c) => {
