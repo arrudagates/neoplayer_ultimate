@@ -3,7 +3,7 @@ mod spotify;
 mod widgets;
 
 use crate::event::{Event, Events};
-use spotify::SpotifyClient;
+use spotify::{SpotifyClient, SpotifyPlayer};
 use std::{error::Error, fmt::Display, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -98,7 +98,7 @@ impl From<String> for Command {
 }
 
 impl App {
-    async fn handle_command(&mut self) {
+    async fn handle_command(&mut self, player: &mut SpotifyPlayer) {
         match Command::from(self.input.drain(..).collect::<String>()) {
             Command::Unknown => {}
             Command::Search(query) => {
@@ -122,8 +122,11 @@ impl App {
             Command::Play(query) => {
                 self.spotify
                     .clone()
+                    .as_ref()
                     .unwrap()
+                    .clone()
                     .play(
+                        player,
                         self.spotify
                             .as_ref()
                             .unwrap()
@@ -142,6 +145,7 @@ impl App {
                     .spotify
                     .as_ref()
                     .unwrap()
+                    .clone()
                     .get_library()
                     .await
                     .clone()
@@ -161,6 +165,10 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let mut app = App::default();
+    app.spotify = Some(SpotifyClient::new().await);
+    let mut player = SpotifyPlayer::new(app.spotify.clone().unwrap().clone()).await;
+
     // Terminal initialization
     let stdout = io::stdout().into_raw_mode()?;
     let stdout = MouseTerminal::from(stdout);
@@ -170,10 +178,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Setup event handlers
     let events = Events::new();
-
-    // Create default app state
-    let mut app = App::default();
-    app.spotify = Some(SpotifyClient::new().await);
 
     loop {
         // Draw UI
@@ -249,16 +253,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                     Key::Char('\n') => {
                         app.spotify
-                            .clone()
+                            .as_ref()
                             .unwrap()
-                            .play(app.results.get_selection().uri.clone())
+                            .clone()
+                            .play(&mut player, app.results.get_selection().uri.clone())
                             .await;
                     }
                     _ => {}
                 },
                 InputMode::Editing => match input {
                     Key::Char('\n') => {
-                        app.handle_command().await;
+                        app.handle_command(&mut player).await;
                         app.input_mode = InputMode::Normal;
                     }
                     Key::Char(c) => {
