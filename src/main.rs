@@ -77,15 +77,21 @@ enum Command {
     Search(String),
     /// Play the first track returned by spotify for the provided query
     Play(String),
+    /// Get the songs saved in the user's library
+    Library,
 }
 
 impl From<String> for Command {
     fn from(command: String) -> Self {
-        let command = command.as_str().split_once(' ').unwrap();
-        let prefix = command.0;
+        let (prefix, command) = if let Some(split) = command.as_str().split_once(' ') {
+            split
+        } else {
+            (command.as_str(), "")
+        };
         match prefix {
-            "search" => Self::Search(String::from(command.1)),
-            "play" => Self::Play(String::from(command.1)),
+            "search" => Self::Search(String::from(command)),
+            "play" => Self::Play(String::from(command)),
+            "library" => Self::Library,
             _ => Self::Unknown,
         }
     }
@@ -130,6 +136,24 @@ impl App {
                             .clone(),
                     )
                     .await;
+            }
+            Command::Library => {
+                self.results.items = self
+                    .spotify
+                    .as_ref()
+                    .unwrap()
+                    .get_library()
+                    .await
+                    .clone()
+                    .into_iter()
+                    .map(|track| {
+                        Track::new(
+                            track.name,
+                            track.artists.first().unwrap().name.clone(),
+                            track.uri,
+                        )
+                    })
+                    .collect();
             }
         }
     }

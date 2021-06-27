@@ -48,4 +48,15 @@ impl SpotifyClient {
             vec![]
         }
     }
+
+    pub async fn get_library(&self) -> Vec<FullTrack> {
+        self.client
+            .current_user_saved_tracks(None, None)
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|saved| saved.track)
+            .collect()
+    }
 }
