@@ -3,6 +3,7 @@ mod spotify;
 mod widgets;
 
 use crate::event::{Event, Events};
+use spotify::SpotifyClient;
 use std::{error::Error, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
@@ -15,7 +16,6 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use rspotify::client::Spotify;
 use widgets::StatefulList;
 
 enum InputMode {
@@ -34,7 +34,7 @@ struct App {
     /// Currently playing song
     np: String,
     /// Spotify client
-    spotify: Option<Spotify>,
+    spotify: Option<SpotifyClient>,
 }
 
 struct Track {
@@ -61,8 +61,12 @@ impl Default for App {
 }
 
 enum Command {
+    /// Unknown Command
     Unknown,
+    /// Search spotify for the provided query
     Search(String),
+    /// Play the first track returned by spotify for the provided query
+    Play(String),
 }
 
 impl From<String> for Command {
@@ -71,6 +75,7 @@ impl From<String> for Command {
         let prefix = command.0;
         match prefix {
             "search" => Self::Search(String::from(command.1)),
+            "play" => Self::Play(String::from(command.1)),
             _ => Self::Unknown,
         }
     }
@@ -80,49 +85,37 @@ impl App {
     async fn handle_command(&mut self) {
         match Command::from(self.input.drain(..).collect::<String>()) {
             Command::Unknown => {}
-            Command::Search(query) => println!(
-                "{:?}",
-                if let rspotify::model::search::SearchResult::Tracks(page) = &self
+            Command::Search(query) => {
+                self.results.items = self
                     .spotify
                     .as_ref()
                     .unwrap()
-                    .search(
-                        &query,
-                        rspotify::senum::SearchType::Track,
-                        Some(20),
-                        None,
-                        None,
-                        None
-                    )
+                    .search(query)
                     .await
+                    .clone()
+                    .into_iter()
+                    .map(|track| Track::new(track.name, track.uri))
+                    .collect()
+            }
+            Command::Play(query) => {
+                self.spotify
+                    .clone()
                     .unwrap()
-                {
-                    self.results.items = page
-                        .items
-                        .clone()
-                        .into_iter()
-                        .map(|track| Track::new(track.name, track.uri))
-                        .collect();
-                } else {
-                    {}
-                }
-            ),
+                    .play(
+                        self.spotify
+                            .as_ref()
+                            .unwrap()
+                            .search(query)
+                            .await
+                            .clone()
+                            .first()
+                            .expect("No results")
+                            .uri
+                            .clone(),
+                    )
+                    .await;
+            }
         }
-    }
-
-    async fn play(&self) {
-        self.spotify
-            .as_ref()
-            .unwrap()
-            .start_playback(
-                None,
-                None,
-                Some(vec![self.results.get_selection().uri.clone()]),
-                None,
-                None,
-            )
-            .await
-            .unwrap();
     }
 }
 
@@ -140,7 +133,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Create default app state
     let mut app = App::default();
-    app.spotify = Some(spotify::get_spotify_client().await);
+    app.spotify = Some(SpotifyClient::new().await);
 
     loop {
         // Draw UI
@@ -170,18 +163,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .block(Block::default().borders(Borders::ALL).title("Input"));
             f.render_widget(input, chunks[2]);
             match app.input_mode {
-                InputMode::Normal =>
-                    // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-                    {}
+                InputMode::Normal => {}
 
                 InputMode::Editing => {
-                    // Make the cursor visible and ask tui-rs to put it at the specified coordinates after rendering
-                    f.set_cursor(
-                        // Put cursor past the end of the input text
-                        chunks[2].x + app.input.width() as u16 + 1,
-                        // Move one line down, from the border to the input line
-                        chunks[2].y + 1,
-                    )
+                    f.set_cursor(chunks[2].x + app.input.width() as u16 + 1, chunks[2].y + 1)
                 }
             }
 
@@ -201,9 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Style::default()
                         .bg(Color::LightGreen)
                         .add_modifier(Modifier::BOLD),
-                )
-                //.highlight_symbol(">> ")
-                ;
+                );
 
             f.render_stateful_widget(results, chunks[1], &mut app.results.state);
         })?;
@@ -225,7 +208,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         break;
                     }
                     Key::Char('\n') => {
-                        app.play().await;
+                        app.spotify
+                            .clone()
+                            .unwrap()
+                            .play(app.results.get_selection().uri.clone())
+                            .await;
                     }
                     _ => {}
                 },
