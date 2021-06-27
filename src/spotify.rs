@@ -1,5 +1,6 @@
 use dotenv;
 use rspotify::client::Spotify;
+use rspotify::model::page::Page;
 use rspotify::model::search::SearchResult;
 use rspotify::model::track::FullTrack;
 use rspotify::oauth2::SpotifyOAuth;
@@ -50,13 +51,19 @@ impl SpotifyClient {
     }
 
     pub async fn get_library(&self) -> Vec<FullTrack> {
-        self.client
-            .current_user_saved_tracks(None, None)
+        let mut library = vec![];
+        let mut offset = 0;
+        while let Ok(Page { items, total, .. }) = self
+            .client
+            .current_user_saved_tracks(Some(50), Some(offset))
             .await
-            .unwrap()
-            .items
-            .into_iter()
-            .map(|saved| saved.track)
-            .collect()
+        {
+            library.extend(items.into_iter().map(|saved| saved.track));
+            if offset > total {
+                break;
+            }
+            offset += 50;
+        }
+        library
     }
 }
