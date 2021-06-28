@@ -1,6 +1,6 @@
 # Neoplayer Ultimate
 
-Rewrite of the original Neoplayer, this time focusing on spotify instead of youtube (with youtube support coming too) and in Rust instead of JavaScript + Node
+Rewrite of the original [Neoplayer](https://github.com/arrudagates/neoplayer), this time focusing on spotify instead of youtube (with youtube support coming too) and in Rust instead of JavaScript + Node
 
 ## Usage
 
