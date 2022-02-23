@@ -3,6 +3,8 @@ mod spotify;
 mod widgets;
 
 use crate::event::{Event, Events};
+use librespot::metadata::Metadata;
+use rspotify_model::Id;
 use spotify::{SpotifyClient, SpotifyPlayer};
 use std::{error::Error, fmt::Display, io};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
@@ -15,8 +17,9 @@ use tui::{
     Terminal,
 };
 use unicode_width::UnicodeWidthStr;
-
 use widgets::StatefulList;
+
+use futures::future::join_all;
 
 enum InputMode {
     Normal,
@@ -108,13 +111,12 @@ impl App {
                     .unwrap()
                     .search(query)
                     .await
-                    .clone()
                     .into_iter()
                     .map(|track| {
                         Track::new(
                             track.name,
                             track.artists.first().unwrap().name.clone(),
-                            track.uri,
+                            track.id.unwrap().uri(),
                         )
                     })
                     .collect()
@@ -135,7 +137,10 @@ impl App {
                             .clone()
                             .first()
                             .expect("No results")
-                            .uri
+                            .id
+                            .clone()
+                            .unwrap()
+                            .to_string()
                             .clone(),
                     )
                     .await;
@@ -148,13 +153,12 @@ impl App {
                     .clone()
                     .get_library()
                     .await
-                    .clone()
                     .into_iter()
                     .map(|track| {
                         Track::new(
                             track.name,
                             track.artists.first().unwrap().name.clone(),
-                            track.uri,
+                            track.id.unwrap().uri(),
                         )
                     })
                     .collect();
@@ -165,9 +169,11 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut app = App::default();
-    app.spotify = Some(SpotifyClient::new().await);
-    let mut player = SpotifyPlayer::new(app.spotify.clone().unwrap().clone()).await;
+    let mut app = App {
+        spotify: Some(SpotifyClient::new().await),
+        ..Default::default()
+    };
+    let mut player = SpotifyPlayer::new().await;
 
     // Terminal initialization
     let stdout = io::stdout().into_raw_mode()?;
@@ -177,7 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // Setup event handlers
-    let events = Events::new();
+    let events = Events::new(player.get_event_channel());
 
     loop {
         // Draw UI
@@ -236,8 +242,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })?;
 
         // Handle input
-        if let Event::Input(input) = events.next()? {
-            match app.input_mode {
+        match events.next()? {
+            Event::Input(input) => match app.input_mode {
                 InputMode::Normal => match input {
                     Key::Char('h') => {
                         app.input_mode = InputMode::Editing;
@@ -277,7 +283,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     }
                     _ => {}
                 },
+            },
+
+            Event::UpdateNP(track) => {
+                app.np = {
+                    let data = librespot::metadata::Track::get(player.get_session(), track)
+                        .await
+                        .unwrap();
+                    format!(
+                        "{} - {}",
+                        join_all(data.artists.into_iter().map(|id| {
+                            let cloned_session = player.get_session().clone();
+
+                            async move {
+                                librespot::metadata::Artist::get(&cloned_session, id)
+                                    .await
+                                    .unwrap()
+                                    .name
+                            }
+                        }))
+                        .await
+                        .join(", "),
+                        data.name
+                    )
+                }
             }
+
+            _ => (),
         }
     }
     Ok(())

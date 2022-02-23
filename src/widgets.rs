@@ -13,13 +13,6 @@ impl<T> StatefulList<T> {
         }
     }
 
-    pub fn with_items(items: Vec<T>) -> StatefulList<T> {
-        StatefulList {
-            state: ListState::default(),
-            items,
-        }
-    }
-
     pub fn next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
@@ -46,10 +39,6 @@ impl<T> StatefulList<T> {
             None => 0,
         };
         self.state.select(Some(i));
-    }
-
-    pub fn unselect(&mut self) {
-        self.state.select(None);
     }
 
     pub fn get_selection(&self) -> &T {

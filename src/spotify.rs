@@ -1,51 +1,40 @@
-use dotenv;
-use rspotify::client::Spotify;
-
-use rspotify::client::SpotifyBuilder;
-use rspotify::model::enums::types::SearchType;
-use rspotify::model::page::Page;
-use rspotify::model::search::SearchResult;
-use rspotify::model::track::FullTrack;
-use rspotify::model::Id;
-use rspotify::oauth2::{CredentialsBuilder, OAuthBuilder};
-use rspotify::scopes;
-
-use librespot::core::authentication::Credentials;
-use librespot::core::config::SessionConfig;
-use librespot::core::session::Session;
-use librespot::core::spotify_id::SpotifyId;
-use librespot::playback::audio_backend;
-use librespot::playback::config::{AudioFormat, PlayerConfig};
-use librespot::playback::player::Player;
-use librespot::protocol::authentication::AuthenticationType;
+use librespot::{
+    core::{
+        authentication::Credentials, config::SessionConfig, session::Session, spotify_id::SpotifyId,
+    },
+    playback::{
+        audio_backend,
+        config::{AudioFormat, PlayerConfig},
+        player::{Player, PlayerEventChannel},
+    },
+};
+use rspotify::{prelude::*, scopes, AuthCodeSpotify, Config};
+use rspotify_model::{
+    enums::types::SearchType, page::Page, search::SearchResult, track::FullTrack,
+};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct SpotifyClient {
-    client: Spotify,
+    client: AuthCodeSpotify,
 }
 
 pub struct SpotifyPlayer {
     player: Player,
+    session: Session,
 }
 
 impl SpotifyPlayer {
-    pub async fn new(spotify: SpotifyClient) -> Self {
+    pub async fn new() -> Self {
         let session_config = SessionConfig::default();
         let player_config = PlayerConfig::default();
         let audio_format = AudioFormat::default();
 
-        let credentials = Credentials {
-            username: spotify.client.me().await.unwrap().id,
-            auth_type: AuthenticationType::AUTHENTICATION_SPOTIFY_TOKEN,
-            auth_data: spotify
-                .client
-                .token
-                .as_ref()
-                .unwrap()
-                .access_token
-                .as_bytes()
-                .to_vec(),
-        };
+        // TODO: Replace normal credentials with OAuth
+        let credentials = Credentials::with_password(
+            dotenv::var("USERNAME").unwrap(),
+            dotenv::var("PASSWORD").unwrap(),
+        );
 
         let backend = audio_backend::find(None).unwrap();
 
@@ -53,10 +42,19 @@ impl SpotifyPlayer {
             .await
             .unwrap();
 
-        let (player, _) = Player::new(player_config, session, None, move || {
+        let (player, _) = Player::new(player_config, session.clone(), None, move || {
             backend(None, audio_format)
         });
-        Self { player }
+
+        Self { player, session }
+    }
+
+    pub fn get_event_channel(&self) -> PlayerEventChannel {
+        self.player.get_player_event_channel()
+    }
+
+    pub fn get_session(&self) -> &Session {
+        &self.session
     }
 }
 
@@ -77,42 +75,35 @@ impl SpotifyClient {
             "user-modify-playback-state"
         );
 
-        let creds = CredentialsBuilder::from_env().build().unwrap();
+        let creds = rspotify::Credentials::from_env().unwrap();
 
-        let oauth = OAuthBuilder::from_env()
-            // .client_id(&dotenv::var("RSPOTIFY_CLIENT_ID").unwrap())
-            // .client_secret(&dotenv::var("RSPOTIFY_CLIENT_SECRET").unwrap())
-            // .redirect_uri(&dotenv::var("RSPOTIFY_REDIRECT_URI").unwrap())
-            .scope(scope)
-            .build()
-            .unwrap();
+        let oauth = rspotify::OAuth::from_env(scope).unwrap();
 
-        //let token = get_token(&mut oauth).await.unwrap();
+        let mut spotify = AuthCodeSpotify::with_config(
+            creds,
+            oauth,
+            Config {
+                cache_path: Path::new("./spotify_cache").to_path_buf(),
+                token_cached: true,
+                token_refreshing: true,
+                ..Default::default()
+            },
+        );
 
-        //let client = Spotify::default().access_token(&token.access_token);
-        let mut spotify = SpotifyBuilder::default()
-            .credentials(creds)
-            .oauth(oauth)
-            .build()
-            .unwrap();
+        let url = spotify.get_authorize_url(false).unwrap();
 
-        spotify.prompt_for_user_token().await.unwrap();
-
-        Self {
-            client: spotify,
-            //  player,
+        if spotify.refresh_token().await.is_err() {
+            spotify.prompt_for_token(&url).await.unwrap()
         }
+
+        Self { client: spotify }
     }
 
     pub async fn play(&mut self, player: &mut SpotifyPlayer, uri: String) {
         player
             .player
             .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
-        //  let id: Id<Track> = Id::from(uri);
-        //  self.client
-        //      .start_uris_playback(vec![id], None, None, None)
-        //      .await
-        //      .unwrap();
+        player.player.play();
     }
 
     pub async fn search(&self, query: String) -> Vec<FullTrack> {
@@ -134,7 +125,7 @@ impl SpotifyClient {
         let mut offset = 0;
         while let Ok(Page { items, total, .. }) = self
             .client
-            .current_user_saved_tracks_manual(Some(50), Some(offset))
+            .current_user_saved_tracks_manual(None, Some(50), Some(offset))
             .await
         {
             library.extend(items.into_iter().map(|saved| saved.track));

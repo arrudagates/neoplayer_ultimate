@@ -8,9 +8,21 @@ edition = "2018"
 
 [dependencies]
 dotenv = "0.15.0"
-librespot = "0.2.0"
-rspotify = {git = "https://github.com/ramsayleung/rspotify", branch = "master", features = ["cli"]}
+librespot = { version = "0.3.1", default-features = false, features = ["pulseaudio-backend"] }
+protobuf = "2.27.1"
+#rspotify-model = "0.11.3"
 termion = "1.5.6"
 tokio = { version = "1.7.1", features = ["full"] }
 tui = "0.15.0"
 unicode-width = "0.1.8"
+futures = "0.3.21"
+
+[dependencies.rspotify]
+#version = "0.11.3"
+git = "https://github.com/ramsayleung/rspotify"
+branch = "master"
+features = ["cli", "env-file"]
+
+[dependencies.rspotify-model]
+git = "https://github.com/ramsayleung/rspotify"
+branch = "master"
