@@ -6,6 +6,7 @@ pub enum Event<I> {
     Input(I),
     Tick,
     UpdateNP(SpotifyId),
+    TrackEnded,
 }
 
 /// A small event handler that wrap termion input and tick events. Each event
@@ -54,7 +55,9 @@ impl Events {
                     librespot::playback::player::PlayerEvent::Playing { .. } => (),
                     librespot::playback::player::PlayerEvent::Paused { .. } => (),
                     librespot::playback::player::PlayerEvent::TimeToPreloadNextTrack { .. } => (),
-                    librespot::playback::player::PlayerEvent::EndOfTrack { .. } => (),
+                    librespot::playback::player::PlayerEvent::EndOfTrack { .. } => {
+                        tx.send(Event::TrackEnded).unwrap()
+                    }
                     librespot::playback::player::PlayerEvent::Unavailable { .. } => (),
                     librespot::playback::player::PlayerEvent::VolumeSet { .. } => (),
                 }

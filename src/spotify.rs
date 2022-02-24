@@ -1,6 +1,7 @@
 use librespot::{
     core::{
-        authentication::Credentials, config::SessionConfig, session::Session, spotify_id::SpotifyId,
+        authentication::Credentials, config::SessionConfig, session::Session,
+        spotify_id::SpotifyId, token::Token,
     },
     playback::{
         audio_backend,
@@ -8,11 +9,10 @@ use librespot::{
         player::{Player, PlayerEventChannel},
     },
 };
-use rspotify::{prelude::*, scopes, AuthCodeSpotify, Config};
+use rspotify::{prelude::*, AuthCodeSpotify};
 use rspotify_model::{
     enums::types::SearchType, page::Page, search::SearchResult, track::FullTrack,
 };
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct SpotifyClient {
@@ -22,6 +22,7 @@ pub struct SpotifyClient {
 pub struct SpotifyPlayer {
     player: Player,
     session: Session,
+    token: Token,
 }
 
 impl SpotifyPlayer {
@@ -38,15 +39,20 @@ impl SpotifyPlayer {
 
         let backend = audio_backend::find(None).unwrap();
 
-        let session = Session::connect(session_config, credentials, None)
-            .await
-            .unwrap();
+        let session = Session::new(session_config, None);
+        session.connect(credentials).await.unwrap();
 
         let (player, _) = Player::new(player_config, session.clone(), None, move || {
             backend(None, audio_format)
         });
 
-        Self { player, session }
+        let token = session.token_provider().get_token("app-remote-control,streaming,user-library-read,user-read-currently-playing,user-read-playback-state,user-read-playback-position,playlist-read-collaborative,playlist-read-private,user-library-modify,user-modify-playback-state").await.unwrap();
+
+        Self {
+            player,
+            session,
+            token,
+        }
     }
 
     pub fn get_event_channel(&self) -> PlayerEventChannel {
@@ -56,54 +62,23 @@ impl SpotifyPlayer {
     pub fn get_session(&self) -> &Session {
         &self.session
     }
+
+    pub fn get_token(&self) -> &Token {
+        &self.token
+    }
+
+    pub async fn play(&mut self, uri: String) {
+        self.player
+            .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
+        self.player.play();
+    }
 }
 
 impl SpotifyClient {
-    pub async fn new() -> Self {
-        dotenv::dotenv().ok();
-
-        let scope = scopes!(
-            "app-remote-control",
-            "streaming",
-            "user-library-read",
-            "user-read-currently-playing",
-            "user-read-playback-state",
-            "user-read-playback-position",
-            "playlist-read-collaborative",
-            "playlist-read-private",
-            "user-library-modify",
-            "user-modify-playback-state"
-        );
-
-        let creds = rspotify::Credentials::from_env().unwrap();
-
-        let oauth = rspotify::OAuth::from_env(scope).unwrap();
-
-        let mut spotify = AuthCodeSpotify::with_config(
-            creds,
-            oauth,
-            Config {
-                cache_path: Path::new("./spotify_cache").to_path_buf(),
-                token_cached: true,
-                token_refreshing: true,
-                ..Default::default()
-            },
-        );
-
-        let url = spotify.get_authorize_url(false).unwrap();
-
-        if spotify.refresh_token().await.is_err() {
-            spotify.prompt_for_token(&url).await.unwrap()
+    pub async fn new(token: rspotify::Token) -> Self {
+        Self {
+            client: rspotify::AuthCodeSpotify::from_token(token),
         }
-
-        Self { client: spotify }
-    }
-
-    pub async fn play(&mut self, player: &mut SpotifyPlayer, uri: String) {
-        player
-            .player
-            .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
-        player.player.play();
     }
 
     pub async fn search(&self, query: String) -> Vec<FullTrack> {
