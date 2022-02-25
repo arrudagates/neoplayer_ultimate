@@ -20,18 +20,21 @@ futures = "0.3.21"
 [dependencies.rspotify]
 #version = "0.11.3"
 git = "https://github.com/ramsayleung/rspotify"
-branch = "master"
+#branch = "master"
+rev = "c40ebd8"
 features = ["cli", "env-file"]
 
 [dependencies.rspotify-model]
 git = "https://github.com/ramsayleung/rspotify"
-branch = "master"
+#branch = "master"
+rev = "c40ebd8"
 
 [dependencies.librespot]
 #version = "0.3.1"
 
 git = "https://github.com/librespot-org/librespot"
-branch = "new-api"
+#branch = "new-api"
+rev = "47f1362"
 
-default-features = false
-features = ["pulseaudio-backend"]
+#default-features = false
+#features = ["pulseaudio-backend"]

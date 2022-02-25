@@ -72,6 +72,14 @@ impl SpotifyPlayer {
         self.player.play();
         Ok(())
     }
+
+    pub fn pause(&mut self) {
+        self.player.pause();
+    }
+
+    pub fn resume(&mut self) {
+        self.player.play();
+    }
 }
 
 impl SpotifyClient {
