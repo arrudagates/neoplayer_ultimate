@@ -3,12 +3,15 @@ use std::{
     sync::mpsc::RecvError,
 };
 
+use rspotify::ClientError;
+
 #[derive(Debug)]
 pub enum Error {
     IO(std::io::Error),
     Dotenv(dotenv::Error),
     LibreSpot(librespot::core::Error),
     Receiver(RecvError),
+    Client(ClientError),
 }
 
 impl Display for Error {
@@ -40,5 +43,11 @@ impl From<librespot::core::Error> for Error {
 impl From<RecvError> for Error {
     fn from(source: RecvError) -> Self {
         Error::Receiver(source)
+    }
+}
+
+impl From<ClientError> for Error {
+    fn from(source: ClientError) -> Self {
+        Error::Client(source)
     }
 }

@@ -67,10 +67,10 @@ impl SpotifyPlayer {
         &self.token
     }
 
-    pub async fn play(&mut self, uri: String) {
-        self.player
-            .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
+    pub async fn play(&mut self, uri: String) -> Result<(), Error> {
+        self.player.load(SpotifyId::from_uri(&uri)?, true, 0);
         self.player.play();
+        Ok(())
     }
 }
 
@@ -81,16 +81,15 @@ impl SpotifyClient {
         }
     }
 
-    pub async fn search(&self, query: String) -> Vec<FullTrack> {
+    pub async fn search(&self, query: String) -> Result<Vec<FullTrack>, Error> {
         if let SearchResult::Tracks(page) = &self
             .client
             .search(&query, &SearchType::Track, None, None, Some(20), None)
-            .await
-            .unwrap()
+            .await?
         {
-            page.items.clone()
+            Ok(page.items.clone())
         } else {
-            vec![]
+            Ok(vec![])
         }
     }
 

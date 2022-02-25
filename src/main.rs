@@ -98,14 +98,14 @@ impl From<String> for Command {
 }
 
 impl App {
-    async fn handle_command(&mut self) {
+    async fn handle_command(&mut self) -> Result<(), Error> {
         match Command::from(self.input.drain(..).collect::<String>()) {
             Command::Unknown => {}
             Command::Search(query) => {
                 self.results.items = self
                     .client
                     .search(query)
-                    .await
+                    .await?
                     .into_iter()
                     .map(|track| {
                         Track::new(
@@ -121,7 +121,7 @@ impl App {
                     .play(
                         self.client
                             .search(query)
-                            .await
+                            .await?
                             .clone()
                             .first()
                             .expect("No results")
@@ -131,7 +131,7 @@ impl App {
                             .to_string()
                             .clone(),
                     )
-                    .await;
+                    .await?;
             }
             Command::Library => {
                 self.results.items = self
@@ -150,6 +150,7 @@ impl App {
                     .collect();
             }
         }
+        Ok(())
     }
 }
 
@@ -290,7 +291,7 @@ async fn main() -> Result<(), Error> {
                     Key::Char('\n') => {
                         app.player
                             .play(app.results.get_selection().uri.clone())
-                            .await;
+                            .await?;
                     }
                     Key::Char('a') => {
                         let selection = &(*app.results.get_selection());
@@ -307,7 +308,7 @@ async fn main() -> Result<(), Error> {
                 },
                 InputMode::Editing => match input {
                     Key::Char('\n') => {
-                        app.handle_command().await;
+                        app.handle_command().await?;
                         app.input_mode = InputMode::Normal;
                     }
                     Key::Char(c) => {
@@ -325,9 +326,8 @@ async fn main() -> Result<(), Error> {
 
             Event::UpdateNP(track) => {
                 app.np = {
-                    let data = librespot::metadata::Track::get(app.player.get_session(), track)
-                        .await
-                        .unwrap();
+                    let data =
+                        librespot::metadata::Track::get(app.player.get_session(), track).await?;
                     format!(
                         "{} - {}",
                         join_all(data.artists.iter().map(|id| {
@@ -349,7 +349,7 @@ async fn main() -> Result<(), Error> {
 
             Event::TrackEnded => {
                 if let Some(next) = app.queue.first() {
-                    app.player.play(next.uri.clone()).await;
+                    app.player.play(next.uri.clone()).await?;
                     app.queue.remove(0);
                 }
             }
