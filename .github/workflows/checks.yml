@@ -15,14 +15,14 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: cargo build --verbose
+      run: sudo apt-get install -y libpulse0 && cargo build --verbose
       
   test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: Run tests
-      run: cargo test --verbose
+      run: sudo apt-get install -y libpulse0 && cargo test --verbose
       
   clippy:
     runs-on: ubuntu-latest
