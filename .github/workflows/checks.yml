@@ -15,14 +15,14 @@ jobs:
     steps:
     - uses: actions/checkout@v2
     - name: Build
-      run: sudo apt-get install -y build-essential libasound2-dev && cargo build --verbose
+      run: sudo apt-get install -y build-essential alsa-lib && cargo build --verbose
       
   test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: Run tests
-      run: sudo apt-get install -y build-essential libasound2-dev && cargo test --verbose
+      run: sudo apt-get install -y build-essential alsa-lib && cargo test --verbose
       
   clippy:
     runs-on: ubuntu-latest
