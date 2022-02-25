@@ -72,6 +72,14 @@ impl SpotifyPlayer {
             .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
         self.player.play();
     }
+
+    pub fn pause(&mut self) {
+        self.player.pause();
+    }
+
+    pub fn resume(&mut self) {
+        self.player.play();
+    }
 }
 
 impl SpotifyClient {

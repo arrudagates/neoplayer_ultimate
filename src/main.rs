@@ -43,6 +43,7 @@ struct App {
     /// Queue
     queue: Vec<Track>,
     toggle_queue: bool,
+    paused: bool,
 }
 
 struct Track {
@@ -75,6 +76,7 @@ enum Command {
     Play(String),
     /// Get the songs saved in the user's library
     Library,
+    Pause,
 }
 
 impl From<String> for Command {
@@ -88,6 +90,7 @@ impl From<String> for Command {
             "search" => Self::Search(String::from(command)),
             "play" => Self::Play(String::from(command)),
             "library" => Self::Library,
+            "pause" => Self::Pause,
             _ => Self::Unknown,
         }
     }
@@ -128,7 +131,19 @@ impl App {
                             .clone(),
                     )
                     .await;
+                self.paused = false;
             }
+
+            Command::Pause => {
+                if self.paused {
+                    self.player.resume();
+                    self.paused = false;
+                } else {
+                    self.player.pause();
+                    self.paused = true;
+                }
+            }
+
             Command::Library => {
                 self.results.items = self
                     .client
@@ -170,6 +185,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         queue: vec![],
         np: String::new(),
         toggle_queue: true,
+        paused: true,
     };
     // Terminal initialization
     let stdout = io::stdout().into_raw_mode()?;
@@ -207,8 +223,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .split(master_chunks[0]);
 
-            let np = Paragraph::new(app.np.as_ref())
-                .block(Block::default().borders(Borders::ALL).title("Now Playing"));
+            let np = Paragraph::new(app.np.as_ref()).block(
+                Block::default().borders(Borders::ALL).title(if app.paused {
+                    "Paused"
+                } else {
+                    "Now Playing"
+                }),
+            );
             f.render_widget(np, chunks_left[0]);
 
             let input = Paragraph::new(app.input.as_ref())
@@ -289,6 +310,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         app.player
                             .play(app.results.get_selection().uri.clone())
                             .await;
+                        app.paused = false;
                     }
                     Key::Char('a') => {
                         let selection = &(*app.results.get_selection());
@@ -349,6 +371,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(next) = app.queue.first() {
                     app.player.play(next.uri.clone()).await;
                     app.queue.remove(0);
+                    app.paused = false;
                 }
             }
 
