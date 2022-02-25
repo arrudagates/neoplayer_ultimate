@@ -14,6 +14,8 @@ use rspotify_model::{
     enums::types::SearchType, page::Page, search::SearchResult, track::FullTrack,
 };
 
+use crate::error::Error;
+
 #[derive(Debug, Clone)]
 pub struct SpotifyClient {
     client: AuthCodeSpotify,
@@ -26,33 +28,31 @@ pub struct SpotifyPlayer {
 }
 
 impl SpotifyPlayer {
-    pub async fn new() -> Self {
+    pub async fn new() -> Result<Self, Error> {
         let session_config = SessionConfig::default();
         let player_config = PlayerConfig::default();
         let audio_format = AudioFormat::default();
 
         // TODO: Replace normal credentials with OAuth
-        let credentials = Credentials::with_password(
-            dotenv::var("USERNAME").unwrap(),
-            dotenv::var("PASSWORD").unwrap(),
-        );
+        let credentials =
+            Credentials::with_password(dotenv::var("USERNAME")?, dotenv::var("PASSWORD")?);
 
         let backend = audio_backend::find(None).unwrap();
 
         let session = Session::new(session_config, None);
-        session.connect(credentials).await.unwrap();
+        session.connect(credentials).await?;
 
         let (player, _) = Player::new(player_config, session.clone(), None, move || {
             backend(None, audio_format)
         });
 
-        let token = session.token_provider().get_token("app-remote-control,streaming,user-library-read,user-read-currently-playing,user-read-playback-state,user-read-playback-position,playlist-read-collaborative,playlist-read-private,user-library-modify,user-modify-playback-state").await.unwrap();
+        let token = session.token_provider().get_token("app-remote-control,streaming,user-library-read,user-read-currently-playing,user-read-playback-state,user-read-playback-position,playlist-read-collaborative,playlist-read-private,user-library-modify,user-modify-playback-state").await?;
 
-        Self {
+        Ok(Self {
             player,
             session,
             token,
-        }
+        })
     }
 
     pub fn get_event_channel(&self) -> PlayerEventChannel {
@@ -67,10 +67,10 @@ impl SpotifyPlayer {
         &self.token
     }
 
-    pub async fn play(&mut self, uri: String) {
-        self.player
-            .load(SpotifyId::from_uri(&uri).unwrap(), true, 0);
+    pub async fn play(&mut self, uri: String) -> Result<(), Error> {
+        self.player.load(SpotifyId::from_uri(&uri)?, true, 0);
         self.player.play();
+        Ok(())
     }
 
     pub fn pause(&mut self) {
@@ -89,16 +89,15 @@ impl SpotifyClient {
         }
     }
 
-    pub async fn search(&self, query: String) -> Vec<FullTrack> {
+    pub async fn search(&self, query: String) -> Result<Vec<FullTrack>, Error> {
         if let SearchResult::Tracks(page) = &self
             .client
             .search(&query, &SearchType::Track, None, None, Some(20), None)
-            .await
-            .unwrap()
+            .await?
         {
-            page.items.clone()
+            Ok(page.items.clone())
         } else {
-            vec![]
+            Ok(vec![])
         }
     }
 

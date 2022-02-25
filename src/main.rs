@@ -1,12 +1,16 @@
+mod error;
 mod event;
 mod spotify;
 mod widgets;
 
-use crate::event::{Event, Events};
+use crate::{
+    error::Error,
+    event::{Event, Events},
+};
 use librespot::metadata::Metadata;
 use rspotify_model::Id;
 use spotify::{SpotifyClient, SpotifyPlayer};
-use std::{collections::HashSet, error::Error, fmt::Display, io, iter::FromIterator};
+use std::{collections::HashSet, fmt::Display, io, iter::FromIterator};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -97,14 +101,14 @@ impl From<String> for Command {
 }
 
 impl App {
-    async fn handle_command(&mut self) {
+    async fn handle_command(&mut self) -> Result<(), Error> {
         match Command::from(self.input.drain(..).collect::<String>()) {
             Command::Unknown => {}
             Command::Search(query) => {
                 self.results.items = self
                     .client
                     .search(query)
-                    .await
+                    .await?
                     .into_iter()
                     .map(|track| {
                         Track::new(
@@ -120,7 +124,7 @@ impl App {
                     .play(
                         self.client
                             .search(query)
-                            .await
+                            .await?
                             .clone()
                             .first()
                             .expect("No results")
@@ -130,7 +134,7 @@ impl App {
                             .to_string()
                             .clone(),
                     )
-                    .await;
+                    .await?;
                 self.paused = false;
             }
 
@@ -161,12 +165,13 @@ impl App {
                     .collect();
             }
         }
+        Ok(())
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let player = SpotifyPlayer::new().await;
+async fn main() -> Result<(), Error> {
+    let player = SpotifyPlayer::new().await?;
 
     let mut app = App {
         client: SpotifyClient::new({
@@ -188,9 +193,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         paused: true,
     };
     // Terminal initialization
-    let stdout = io::stdout().into_raw_mode()?;
-    let stdout = MouseTerminal::from(stdout);
-    let stdout = AlternateScreen::from(stdout);
+    let stdout = AlternateScreen::from(MouseTerminal::from(io::stdout().into_raw_mode()?));
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -309,7 +312,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     Key::Char('\n') => {
                         app.player
                             .play(app.results.get_selection().uri.clone())
-                            .await;
+                            .await?;
                         app.paused = false;
                     }
                     Key::Char('a') => {
@@ -327,7 +330,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 },
                 InputMode::Editing => match input {
                     Key::Char('\n') => {
-                        app.handle_command().await;
+                        app.handle_command().await?;
                         app.input_mode = InputMode::Normal;
                     }
                     Key::Char(c) => {
@@ -345,9 +348,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             Event::UpdateNP(track) => {
                 app.np = {
-                    let data = librespot::metadata::Track::get(app.player.get_session(), track)
-                        .await
-                        .unwrap();
+                    let data =
+                        librespot::metadata::Track::get(app.player.get_session(), track).await?;
                     format!(
                         "{} - {}",
                         join_all(data.artists.iter().map(|id| {
@@ -369,7 +371,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             Event::TrackEnded => {
                 if let Some(next) = app.queue.first() {
-                    app.player.play(next.uri.clone()).await;
+                    app.player.play(next.uri.clone()).await?;
                     app.queue.remove(0);
                     app.paused = false;
                 }
