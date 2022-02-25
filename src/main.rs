@@ -1,12 +1,16 @@
+mod error;
 mod event;
 mod spotify;
 mod widgets;
 
-use crate::event::{Event, Events};
+use crate::{
+    error::Error,
+    event::{Event, Events},
+};
 use librespot::metadata::Metadata;
 use rspotify_model::Id;
 use spotify::{SpotifyClient, SpotifyPlayer};
-use std::{collections::HashSet, error::Error, fmt::Display, io, iter::FromIterator};
+use std::{collections::HashSet, fmt::Display, io, iter::FromIterator};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -150,8 +154,8 @@ impl App {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let player = SpotifyPlayer::new().await;
+async fn main() -> Result<(), Error> {
+    let player = SpotifyPlayer::new().await?;
 
     let mut app = App {
         client: SpotifyClient::new({
@@ -172,9 +176,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         toggle_queue: true,
     };
     // Terminal initialization
-    let stdout = io::stdout().into_raw_mode()?;
-    let stdout = MouseTerminal::from(stdout);
-    let stdout = AlternateScreen::from(stdout);
+    let stdout = AlternateScreen::from(MouseTerminal::from(io::stdout().into_raw_mode()?));
     let backend = TermionBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
