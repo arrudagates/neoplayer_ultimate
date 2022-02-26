@@ -12,6 +12,7 @@ pub enum Event<I> {
 /// A small event handler that wrap termion input and tick events. Each event
 /// type is handled in its own thread and returned to a common `Receiver`
 pub struct Events {
+    pub tx: mpsc::Sender<Event<Key>>,
     rx: mpsc::Receiver<Event<Key>>,
 }
 
@@ -40,15 +41,16 @@ impl Events {
             thread::sleep(Duration::from_millis(250));
         });
 
+        let tx_clone = tx.clone();
         tokio::spawn(async move {
             while let Some(event) = player_events.recv().await {
                 match event {
                     librespot::playback::player::PlayerEvent::Stopped { .. } => (),
                     librespot::playback::player::PlayerEvent::Started { track_id, .. } => {
-                        tx.send(Event::UpdateNP(track_id)).unwrap()
+                        tx_clone.send(Event::UpdateNP(track_id)).unwrap()
                     }
                     librespot::playback::player::PlayerEvent::Changed { new_track_id, .. } => {
-                        tx.send(Event::UpdateNP(new_track_id)).unwrap()
+                        tx_clone.send(Event::UpdateNP(new_track_id)).unwrap()
                     }
                     librespot::playback::player::PlayerEvent::Loading { .. } => (),
                     librespot::playback::player::PlayerEvent::Preloading { .. } => (),
@@ -56,7 +58,7 @@ impl Events {
                     librespot::playback::player::PlayerEvent::Paused { .. } => (),
                     librespot::playback::player::PlayerEvent::TimeToPreloadNextTrack { .. } => (),
                     librespot::playback::player::PlayerEvent::EndOfTrack { .. } => {
-                        tx.send(Event::TrackEnded).unwrap()
+                        tx_clone.send(Event::TrackEnded).unwrap()
                     }
                     librespot::playback::player::PlayerEvent::Unavailable { .. } => (),
                     librespot::playback::player::PlayerEvent::VolumeSet { .. } => (),
@@ -64,7 +66,7 @@ impl Events {
             }
         });
 
-        Events { rx }
+        Events { tx, rx }
     }
 
     pub fn next(&self) -> Result<Event<Key>, mpsc::RecvError> {

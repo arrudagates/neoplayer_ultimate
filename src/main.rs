@@ -1,16 +1,19 @@
 mod error;
 mod event;
+mod player;
 mod spotify;
 mod widgets;
+mod youtube;
 
 use crate::{
     error::Error,
     event::{Event, Events},
 };
 use librespot::metadata::Metadata;
+use player::Player;
 use rspotify_model::Id;
 use spotify::{SpotifyClient, SpotifyPlayer};
-use std::{collections::HashSet, fmt::Display, io, iter::FromIterator};
+use std::{collections::HashSet, fmt::Display, io, iter::FromIterator, sync::mpsc, thread};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -22,6 +25,7 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 use widgets::StatefulList;
+use youtube::YoutubeClient;
 
 use futures::future::join_all;
 
@@ -37,26 +41,38 @@ struct App {
     /// Current input mode
     input_mode: InputMode,
     /// Search results
-    results: StatefulList<Track>,
+    results: (StatefulList<Track>, Platform),
     /// Currently playing song
     np: String,
     /// Spotify client
     client: SpotifyClient,
     ///Spotify Player
-    player: SpotifyPlayer,
     /// Queue
     queue: Vec<Track>,
     toggle_queue: bool,
     paused: bool,
+    player: Player,
 }
 
-struct Track {
+#[derive(PartialEq)]
+pub enum Platform {
+    Spotify,
+    Youtube,
+}
+
+#[derive(Clone)]
+pub enum Uri {
+    Spotify(String),
+    Youtube(String),
+}
+
+pub struct Track {
     /// Track title
     name: String,
     /// Track artist
     artist: String,
     /// Track URI
-    uri: String,
+    uri: Uri,
 }
 
 impl Display for Track {
@@ -66,7 +82,7 @@ impl Display for Track {
 }
 
 impl Track {
-    fn new(name: String, artist: String, uri: String) -> Self {
+    fn new(name: String, artist: String, uri: Uri) -> Self {
         Self { name, artist, uri }
     }
 }
@@ -81,6 +97,7 @@ enum Command {
     /// Get the songs saved in the user's library
     Library,
     Pause,
+    YTSearch(String),
 }
 
 impl From<String> for Command {
@@ -95,6 +112,7 @@ impl From<String> for Command {
             "play" => Self::Play(String::from(command)),
             "library" => Self::Library,
             "pause" => Self::Pause,
+            "ytsearch" => Self::YTSearch(String::from(command)),
             _ => Self::Unknown,
         }
     }
@@ -105,7 +123,7 @@ impl App {
         match Command::from(self.input.drain(..).collect::<String>()) {
             Command::Unknown => {}
             Command::Search(query) => {
-                self.results.items = self
+                self.results.0.items = self
                     .client
                     .search(query)
                     .await?
@@ -114,14 +132,25 @@ impl App {
                         Track::new(
                             track.name,
                             track.artists.first().unwrap().name.clone(),
-                            track.id.unwrap().uri(),
+                            Uri::Spotify(track.id.unwrap().uri()),
                         )
                     })
-                    .collect()
+                    .collect();
+                self.results.1 = Platform::Spotify;
+            }
+            Command::YTSearch(query) => {
+                self.results.0.items = YoutubeClient::search(query)
+                    .unwrap()
+                    .into_iter()
+                    .map(|yt_res| {
+                        Track::new(yt_res.title, String::new(), Uri::Youtube(yt_res.href))
+                    })
+                    .collect();
+                self.results.1 = Platform::Youtube;
             }
             Command::Play(query) => {
                 self.player
-                    .play(
+                    .play(Uri::Spotify(
                         self.client
                             .search(query)
                             .await?
@@ -133,8 +162,8 @@ impl App {
                             .unwrap()
                             .to_string()
                             .clone(),
-                    )
-                    .await?;
+                    ))
+                    .await;
                 self.paused = false;
             }
 
@@ -149,7 +178,7 @@ impl App {
             }
 
             Command::Library => {
-                self.results.items = self
+                self.results.0.items = self
                     .client
                     .clone()
                     .get_library()
@@ -159,10 +188,11 @@ impl App {
                         Track::new(
                             track.name,
                             track.artists.first().unwrap().name.clone(),
-                            track.id.unwrap().uri(),
+                            Uri::Spotify(track.id.unwrap().uri()),
                         )
                     })
                     .collect();
+                self.results.1 = Platform::Spotify;
             }
         }
         Ok(())
@@ -172,6 +202,7 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let player = SpotifyPlayer::new().await?;
+    let (_stream, handle) = rodio::OutputStream::try_default().unwrap();
 
     let mut app = App {
         client: SpotifyClient::new({
@@ -183,10 +214,10 @@ async fn main() -> Result<(), Error> {
             }
         })
         .await,
-        player,
+        player: Player::new(handle).await,
         input: String::new(),
         input_mode: InputMode::Normal,
-        results: StatefulList::new(),
+        results: (StatefulList::new(), Platform::Spotify),
         queue: vec![],
         np: String::new(),
         toggle_queue: true,
@@ -198,10 +229,11 @@ async fn main() -> Result<(), Error> {
     let mut terminal = Terminal::new(backend)?;
 
     // Setup event handlers
-    let events = Events::new(app.player.get_event_channel());
+    let events = Events::new(app.player.spotify.get_event_channel());
 
     loop {
         // Draw UI
+        #[cfg(not(feature = "debug-log"))]
         terminal.draw(|f| {
             let master_chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -253,6 +285,7 @@ async fn main() -> Result<(), Error> {
 
             let list: Vec<ListItem> = app
                 .results
+                .0
                 .items
                 .iter()
                 .enumerate()
@@ -265,11 +298,15 @@ async fn main() -> Result<(), Error> {
                 .block(Block::default().borders(Borders::ALL).title("Tracks"))
                 .highlight_style(
                     Style::default()
-                        .bg(Color::LightGreen)
+                        .bg(if app.results.1 == Platform::Spotify {
+                            Color::LightGreen
+                        } else {
+                            Color::LightRed
+                        })
                         .add_modifier(Modifier::BOLD),
                 );
 
-            f.render_stateful_widget(results, chunks_left[1], &mut app.results.state);
+            f.render_stateful_widget(results, chunks_left[1], &mut app.results.0.state);
 
             let tracks: Vec<ListItem> = app
                 .queue
@@ -293,6 +330,19 @@ async fn main() -> Result<(), Error> {
             }
         })?;
 
+        if app.player.current == Platform::Youtube {
+            if app.player.youtube.sink.empty() {
+                if let Some(next) = app.queue.first() {
+                    app.player.play(next.uri.clone()).await;
+                    if let Uri::Youtube(_) = next.uri {
+                        app.np = next.name.clone()
+                    }
+                    app.queue.remove(0);
+                    app.paused = false;
+                }
+            }
+        }
+
         // Handle input
         match events.next()? {
             Event::Input(input) => match app.input_mode {
@@ -301,26 +351,29 @@ async fn main() -> Result<(), Error> {
                         app.input_mode = InputMode::Editing;
                     }
                     Key::Down => {
-                        app.results.next();
+                        app.results.0.next();
                     }
                     Key::Up => {
-                        app.results.previous();
+                        app.results.0.previous();
                     }
                     Key::Char('e') => {
                         break;
                     }
                     Key::Char('\n') => {
                         app.player
-                            .play(app.results.get_selection().uri.clone())
-                            .await?;
+                            .play(app.results.0.get_selection().uri.clone())
+                            .await;
+                        if let Uri::Youtube(_) = app.results.0.get_selection().uri.clone() {
+                            app.np = app.results.0.get_selection().name.clone();
+                        }
                         app.paused = false;
                     }
                     Key::Char('a') => {
-                        let selection = &(*app.results.get_selection());
+                        let selection = &(*app.results.0.get_selection());
                         app.queue.push(Track::new(
                             selection.name.to_string(),
                             selection.artist.to_string(),
-                            selection.uri.to_string(),
+                            selection.uri.clone(),
                         ));
                     }
                     Key::Char('q') => {
@@ -349,11 +402,12 @@ async fn main() -> Result<(), Error> {
             Event::UpdateNP(track) => {
                 app.np = {
                     let data =
-                        librespot::metadata::Track::get(app.player.get_session(), track).await?;
+                        librespot::metadata::Track::get(app.player.spotify.get_session(), track)
+                            .await?;
                     format!(
                         "{} - {}",
                         join_all(data.artists.iter().map(|id| {
-                            let cloned_session = app.player.get_session().clone();
+                            let cloned_session = app.player.spotify.get_session().clone();
 
                             async move {
                                 librespot::metadata::Artist::get(&cloned_session, *id)
@@ -371,7 +425,10 @@ async fn main() -> Result<(), Error> {
 
             Event::TrackEnded => {
                 if let Some(next) = app.queue.first() {
-                    app.player.play(next.uri.clone()).await?;
+                    app.player.play(next.uri.clone()).await;
+                    if let Uri::Youtube(_) = next.uri {
+                        app.np = next.name.clone()
+                    }
                     app.queue.remove(0);
                     app.paused = false;
                 }
