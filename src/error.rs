@@ -4,14 +4,23 @@ use std::{
 };
 
 use rspotify::ClientError;
+use termion::event::Key;
+use tokio::sync::broadcast::error::SendError;
+
+use crate::event::Event;
 
 #[derive(Debug)]
 pub enum Error {
     IO(std::io::Error),
     Dotenv(dotenv::Error),
     LibreSpot(librespot::core::Error),
+    EventSender(SendError<Event<Key>>),
     Receiver(RecvError),
     Client(ClientError),
+    OSMediaControls(souvlaki::Error),
+    Ureq(ureq::Error),
+    SerdeJson(serde_json::Error),
+    Other(String),
 }
 
 impl Display for Error {
@@ -49,5 +58,29 @@ impl From<RecvError> for Error {
 impl From<ClientError> for Error {
     fn from(source: ClientError) -> Self {
         Error::Client(source)
+    }
+}
+
+impl From<souvlaki::Error> for Error {
+    fn from(source: souvlaki::Error) -> Self {
+        Error::OSMediaControls(source)
+    }
+}
+
+impl From<ureq::Error> for Error {
+    fn from(source: ureq::Error) -> Self {
+        Error::Ureq(source)
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(source: serde_json::Error) -> Self {
+        Error::SerdeJson(source)
+    }
+}
+
+impl From<SendError<Event<Key>>> for Error {
+    fn from(source: SendError<Event<Key>>) -> Self {
+        Error::EventSender(source)
     }
 }

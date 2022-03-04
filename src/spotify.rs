@@ -1,3 +1,4 @@
+use crate::error::Error;
 use librespot::{
     core::{
         authentication::Credentials, config::SessionConfig, session::Session,
@@ -13,8 +14,6 @@ use rspotify::{prelude::*, AuthCodeSpotify};
 use rspotify_model::{
     enums::types::SearchType, page::Page, search::SearchResult, track::FullTrack,
 };
-
-use crate::error::Error;
 
 #[derive(Debug, Clone)]
 pub struct SpotifyClient {
@@ -70,6 +69,7 @@ impl SpotifyPlayer {
     pub async fn play(&mut self, uri: String) -> Result<(), Error> {
         self.player.load(SpotifyId::from_uri(&uri)?, true, 0);
         self.player.play();
+
         Ok(())
     }
 
