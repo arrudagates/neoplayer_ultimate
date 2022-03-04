@@ -12,11 +12,15 @@ Press 'h' to enter input mode
 Commands currently available are:
 ```text
 search <query> // Searches spotify for the query and returns a list of results
+ytsearch <query> // Searches youtube for the query and returns a list of results
 play <query> // Searches spotify for the query and plays the first result without displaying them
 library // Fetches the user's saved songs
 pause // Toggle between paused and unpaused states
 ```
-When not in input mode, use arrows up and down to select tracks in the results list and press enter to play them
+When not in input mode, use arrows up and down to select tracks in the results list and press enter to play them.
+To toggle the queue list, press `q`.
+To exit press `e`.
+To advance to the next song and return to the previous, press `,` and `.` respectively.
 
 ## Contributing
 Feel free to open issues and make pull requests, I'll do my best to work on them.
