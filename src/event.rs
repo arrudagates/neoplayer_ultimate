@@ -2,11 +2,14 @@ use librespot::{core::spotify_id::SpotifyId, playback::player::PlayerEventChanne
 use std::{io, sync::mpsc, thread, time::Duration};
 use termion::{event::Key, input::TermRead};
 
+#[derive(Debug)]
 pub enum Event<I> {
     Input(I),
     Tick,
     UpdateNP(SpotifyId),
     TrackEnded,
+    PleasePause,
+    PleaseResume,
 }
 
 /// A small event handler that wrap termion input and tick events. Each event

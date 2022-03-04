@@ -21,6 +21,7 @@ ureq = "2.4.0"
 serde = "1.0.136"
 serde_json = "1.0.79"
 ytd-rs = { version = "0.1.6", features = ["yt-dlp"] }
+souvlaki = "0.5.1"
 
 [dependencies.rspotify]
 #version = "0.11.3"

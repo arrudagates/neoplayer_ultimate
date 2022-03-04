@@ -1,6 +1,6 @@
 use rodio::OutputStreamHandle;
 
-use crate::{spotify::SpotifyPlayer, youtube::YoutubeClient, Platform, Uri};
+use crate::{spotify::SpotifyPlayer, youtube::YoutubeClient, NeoResult, Platform, Uri};
 
 pub struct Player {
     pub youtube: YoutubeClient,
@@ -9,12 +9,12 @@ pub struct Player {
 }
 
 impl Player {
-    pub async fn new(osh: OutputStreamHandle) -> Self {
-        Self {
-            youtube: YoutubeClient::new(osh),
+    pub async fn new(osh: OutputStreamHandle) -> NeoResult<Self> {
+        Ok(Self {
+            youtube: YoutubeClient::new(osh)?,
             spotify: SpotifyPlayer::new().await.unwrap(),
             current: Platform::Spotify,
-        }
+        })
     }
 
     pub async fn play(&mut self, uri: Uri) {

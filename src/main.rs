@@ -9,11 +9,13 @@ use crate::{
     error::Error,
     event::{Event, Events},
 };
+use futures::future::join_all;
 use librespot::metadata::Metadata;
 use player::Player;
 use rspotify_model::Id;
+use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig};
 use spotify::{SpotifyClient, SpotifyPlayer};
-use std::{collections::HashSet, fmt::Display, io, iter::FromIterator, sync::mpsc, thread};
+use std::{borrow::BorrowMut, collections::HashSet, fmt::Display, io, iter::FromIterator};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -27,7 +29,7 @@ use unicode_width::UnicodeWidthStr;
 use widgets::StatefulList;
 use youtube::YoutubeClient;
 
-use futures::future::join_all;
+pub type NeoResult<T> = Result<T, Error>;
 
 enum InputMode {
     Normal,
@@ -49,9 +51,12 @@ struct App {
     ///Spotify Player
     /// Queue
     queue: Vec<Track>,
+    history: Vec<Track>,
+    current: Option<Track>,
     toggle_queue: bool,
     paused: bool,
     player: Player,
+    os_media_controls: Option<MediaControls>,
 }
 
 #[derive(PartialEq)]
@@ -60,12 +65,13 @@ pub enum Platform {
     Youtube,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Uri {
     Spotify(String),
     Youtube(String),
 }
 
+#[derive(Clone, Debug)]
 pub struct Track {
     /// Track title
     name: String,
@@ -128,19 +134,19 @@ impl App {
                     .search(query)
                     .await?
                     .into_iter()
-                    .map(|track| {
-                        Track::new(
+                    .map(|track| -> Option<Track> {
+                        Some(Track::new(
                             track.name,
-                            track.artists.first().unwrap().name.clone(),
+                            track.artists.first()?.name.clone(),
                             Uri::Spotify(track.id.unwrap().uri()),
-                        )
+                        ))
                     })
-                    .collect();
+                    .collect::<Option<Vec<Track>>>()
+                    .ok_or_else(|| Error::Other(String::from("Search returned no results.")))?;
                 self.results.1 = Platform::Spotify;
             }
             Command::YTSearch(query) => {
-                self.results.0.items = YoutubeClient::search(query)
-                    .unwrap()
+                self.results.0.items = YoutubeClient::search(query)?
                     .into_iter()
                     .map(|yt_res| {
                         Track::new(yt_res.title, String::new(), Uri::Youtube(yt_res.href))
@@ -164,16 +170,17 @@ impl App {
                             .clone(),
                     ))
                     .await;
-                self.paused = false;
+                self.set_playback_state(false)?;
+                // TODO: Add to self.current
             }
 
             Command::Pause => {
                 if self.paused {
                     self.player.resume();
-                    self.paused = false;
+                    self.set_playback_state(false)?;
                 } else {
                     self.player.pause();
-                    self.paused = true;
+                    self.set_playback_state(true)?;
                 }
             }
 
@@ -184,17 +191,33 @@ impl App {
                     .get_library()
                     .await
                     .into_iter()
-                    .map(|track| {
-                        Track::new(
-                            track.name,
-                            track.artists.first().unwrap().name.clone(),
-                            Uri::Spotify(track.id.unwrap().uri()),
-                        )
+                    .filter_map(|track| {
+                        if let (Some(first_artist), Some(id)) = (track.artists.first(), track.id) {
+                            Some(Track::new(
+                                track.name,
+                                first_artist.name.clone(),
+                                Uri::Spotify(id.uri()),
+                            ))
+                        } else {
+                            None
+                        }
                     })
                     .collect();
                 self.results.1 = Platform::Spotify;
             }
         }
+        Ok(())
+    }
+
+    fn set_playback_state(&mut self, paused: bool) -> NeoResult<()> {
+        self.paused = paused;
+        if let Some(controls) = self.os_media_controls.borrow_mut() {
+            controls.set_playback(if paused {
+                MediaPlayback::Paused { progress: None }
+            } else {
+                MediaPlayback::Playing { progress: None }
+            })?
+        };
         Ok(())
     }
 }
@@ -214,15 +237,20 @@ async fn main() -> Result<(), Error> {
             }
         })
         .await,
-        player: Player::new(handle).await,
+        player: Player::new(handle).await?,
         input: String::new(),
         input_mode: InputMode::Normal,
         results: (StatefulList::new(), Platform::Spotify),
         queue: vec![],
+        history: vec![],
+        current: None,
         np: String::new(),
         toggle_queue: true,
         paused: true,
+        // TODO: Find a way to make this async, or initialize the app without it at first (it takes considerable time to load and delays the app start)
+        os_media_controls: None,
     };
+
     // Terminal initialization
     let stdout = AlternateScreen::from(MouseTerminal::from(io::stdout().into_raw_mode()?));
     let backend = TermionBackend::new(stdout);
@@ -231,6 +259,46 @@ async fn main() -> Result<(), Error> {
     // Setup event handlers
     let events = Events::new(app.player.spotify.get_event_channel());
 
+    if let Ok(controls) = MediaControls::new(PlatformConfig {
+        dbus_name: "neoplayer",
+        display_name: "Neoplayer Ultimate",
+        hwnd: {
+            #[cfg(not(target_os = "windows"))]
+            {
+                None
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                use raw_window_handle::windows::WindowsHandle;
+
+                let handle: WindowsHandle = unimplemented!();
+                Some(handle.hwnd)
+            };
+        },
+    }) {
+        app.os_media_controls = Some(controls)
+    };
+
+    let tx_clone = events.tx.clone();
+
+    if let Some(controls) = app.os_media_controls.borrow_mut() {
+        controls.attach(move |event: MediaControlEvent| match event {
+            MediaControlEvent::Play => tx_clone.send(Event::PleaseResume).unwrap(),
+            MediaControlEvent::Pause => tx_clone.send(Event::PleasePause).unwrap(),
+            MediaControlEvent::Toggle => todo!(),
+            MediaControlEvent::Next => todo!(),
+            MediaControlEvent::Previous => todo!(),
+            MediaControlEvent::Stop => todo!(),
+            MediaControlEvent::Seek(_) => todo!(),
+            MediaControlEvent::SeekBy(_, _) => todo!(),
+            MediaControlEvent::SetPosition(_) => todo!(),
+            MediaControlEvent::OpenUri(_) => todo!(),
+            MediaControlEvent::Raise => todo!(),
+            MediaControlEvent::Quit => todo!(),
+        })?
+    };
+
     loop {
         // Draw UI
         #[cfg(not(feature = "debug-log"))]
@@ -238,8 +306,8 @@ async fn main() -> Result<(), Error> {
             let master_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .margin(2)
-                .constraints(if app.toggle_queue {
-                    [Constraint::Min(40), Constraint::Max(30)].as_ref()
+                .constraints(if app.toggle_queue && f.size().width > 90 {
+                    [Constraint::Percentage(65), Constraint::Max(30)].as_ref()
                 } else {
                     [Constraint::Percentage(100)].as_ref()
                 })
@@ -259,11 +327,15 @@ async fn main() -> Result<(), Error> {
                 .split(master_chunks[0]);
 
             let np = Paragraph::new(app.np.as_ref()).block(
-                Block::default().borders(Borders::ALL).title(if app.paused {
-                    "Paused"
-                } else {
-                    "Now Playing"
-                }),
+                Block::default().borders(Borders::ALL).title(format!(
+                    "{} {}",
+                    if app.player.current == Platform::Spotify {
+                        ""
+                    } else {
+                        ""
+                    },
+                    if app.paused { "Paused" } else { "Now Playing" }
+                )),
             );
             f.render_widget(np, chunks_left[0]);
 
@@ -325,21 +397,29 @@ async fn main() -> Result<(), Error> {
                         .add_modifier(Modifier::BOLD),
                 );
 
-            if app.toggle_queue {
+            if app.toggle_queue && f.size().width > 90 {
                 f.render_widget(queue, master_chunks[1]);
             }
         })?;
 
-        if app.player.current == Platform::Youtube {
-            if app.player.youtube.sink.empty() {
-                if let Some(next) = app.queue.first() {
-                    app.player.play(next.uri.clone()).await;
-                    if let Uri::Youtube(_) = next.uri {
-                        app.np = next.name.clone()
-                    }
-                    app.queue.remove(0);
-                    app.paused = false;
+        if let (Some(controls), Some(current)) =
+            (app.os_media_controls.borrow_mut(), app.current.clone())
+        {
+            controls.set_metadata(MediaMetadata {
+                title: Some(&current.name),
+                artist: Some(&current.artist),
+                ..Default::default()
+            })?;
+        }
+
+        if app.player.current == Platform::Youtube && app.player.youtube.sink.empty() {
+            if let Some(next) = app.queue.first() {
+                app.player.play(next.uri.clone()).await;
+                if let Uri::Youtube(_) = next.uri {
+                    app.np = next.name.clone()
                 }
+                app.queue.remove(0);
+                app.set_playback_state(false)?;
             }
         }
 
@@ -357,7 +437,10 @@ async fn main() -> Result<(), Error> {
                         app.results.0.previous();
                     }
                     Key::Char('e') => {
-                        break;
+                        if let Some(controls) = app.os_media_controls.borrow_mut() {
+                            controls.detach()?;
+                        }
+                        return Ok(());
                     }
                     Key::Char('\n') => {
                         app.player
@@ -366,7 +449,8 @@ async fn main() -> Result<(), Error> {
                         if let Uri::Youtube(_) = app.results.0.get_selection().uri.clone() {
                             app.np = app.results.0.get_selection().name.clone();
                         }
-                        app.paused = false;
+                        app.set_playback_state(false)?;
+                        app.current = Some(app.results.0.get_selection().clone());
                     }
                     Key::Char('a') => {
                         let selection = &(*app.results.0.get_selection());
@@ -378,6 +462,34 @@ async fn main() -> Result<(), Error> {
                     }
                     Key::Char('q') => {
                         app.toggle_queue = !app.toggle_queue;
+                    }
+                    Key::Char(',') => {
+                        if let Some(previous) = app.history.first() {
+                            app.player.play(previous.uri.clone()).await;
+                            if let Uri::Youtube(_) = previous.uri {
+                                app.np = previous.name.clone()
+                            }
+                            if let Some(current) = app.current.clone() {
+                                app.queue.insert(0, current);
+                            }
+                            app.current = Some(previous.clone());
+                            app.history.remove(0);
+                            app.set_playback_state(false)?;
+                        }
+                    }
+                    Key::Char('.') => {
+                        if let Some(next) = app.queue.first() {
+                            app.player.play(next.uri.clone()).await;
+                            if let Uri::Youtube(_) = next.uri {
+                                app.np = next.name.clone()
+                            }
+                            if let Some(current) = app.current.clone() {
+                                app.history.insert(0, current);
+                            }
+                            app.current = Some(next.clone());
+                            app.queue.remove(0);
+                            app.set_playback_state(false)?;
+                        }
                     }
                     _ => {}
                 },
@@ -430,12 +542,22 @@ async fn main() -> Result<(), Error> {
                         app.np = next.name.clone()
                     }
                     app.queue.remove(0);
-                    app.paused = false;
+                    app.set_playback_state(false)?;
+                } else if let Some(controls) = app.os_media_controls.borrow_mut() {
+                    controls.set_playback(MediaPlayback::Stopped)?
                 }
+            }
+
+            Event::PleasePause => {
+                app.player.pause();
+                app.set_playback_state(true)?;
+            }
+            Event::PleaseResume => {
+                app.player.resume();
+                app.set_playback_state(false)?;
             }
 
             Event::Tick => (),
         }
     }
-    Ok(())
 }

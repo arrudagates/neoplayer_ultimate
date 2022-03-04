@@ -2,6 +2,8 @@ use rodio::{Decoder, OutputStreamHandle, Sink};
 use serde_json::Value;
 use std::{fs::File, io::BufReader};
 
+use crate::{error::Error, NeoResult};
+
 pub struct YoutubeClient {
     pub sink: Sink,
 }
@@ -13,57 +15,71 @@ pub struct YoutubeResult {
 }
 
 impl YoutubeClient {
-    pub fn new(output_stream_handle: OutputStreamHandle) -> Self {
-        Self {
-            sink: Sink::try_new(&output_stream_handle).unwrap(),
-        }
+    pub fn new(output_stream_handle: OutputStreamHandle) -> NeoResult<Self> {
+        Ok(Self {
+            sink: Sink::try_new(&output_stream_handle)
+                .map_err(|e| Error::Other(format!("Rodio Error: {:?}", e)))?,
+        })
     }
 
-    pub fn search(query: String) -> Result<Vec<YoutubeResult>, ureq::Error> {
+    pub fn search(query: String) -> NeoResult<Vec<YoutubeResult>> {
         let resp =
             ureq::get(format!("https://www.youtube.com/results?search_query={}", query).as_str())
                 .call()?;
 
-        Ok(serde_json::from_str::<Value>(
-            resp.into_string()
-                .unwrap()
+        serde_json::from_str::<Value>(
+            resp.into_string()?
                 .split("{\"itemSectionRenderer\":")
                 .last()
-                .unwrap()
+                .ok_or_else(|| Error::Other(String::from("Split failed.")))?
                 .split("},{\"continuationItemRenderer\":{")
                 .collect::<Vec<&str>>()[0],
-        )
-        .unwrap()
+        )?
         .get("contents")
-        .unwrap()
+        .ok_or_else(|| Error::Other(String::from("Parsing Error: Can't find 'contents'.")))?
         .as_array()
-        .unwrap()
-        .into_iter()
+        .ok_or_else(|| Error::Other(String::from("Parsing Error: Not an array.")))?
+        .iter()
         .filter_map(|element| {
             if let Value::Object(obj) = element {
-                if let Some(obj) = obj.get("videoRenderer") {
-                    Some(YoutubeResult {
-                        title: obj
-                            .get("title")
-                            .unwrap()
-                            .get("runs")
-                            .unwrap()
-                            .as_array()
-                            .unwrap()[0]
-                            .get("text")
-                            .unwrap()
-                            .to_string()
-                            .replace("\"", ""),
-                        href: obj.get("videoId").unwrap().to_string().replace("\"", ""),
+                obj.get("videoRenderer")
+                    .map(|obj| -> NeoResult<YoutubeResult> {
+                        Ok(YoutubeResult {
+                            title: obj
+                                .get("title")
+                                .ok_or_else(|| {
+                                    Error::Other(String::from("Parsing Error: Can't find 'title'."))
+                                })?
+                                .get("runs")
+                                .ok_or_else(|| {
+                                    Error::Other(String::from("Parsing Error: Can't find 'runs'."))
+                                })?
+                                .as_array()
+                                .ok_or_else(|| {
+                                    Error::Other(String::from("Parsing Error: Not an array."))
+                                })?[0]
+                                .get("text")
+                                .ok_or_else(|| {
+                                    Error::Other(String::from("Parsing Error: Can't find 'text'."))
+                                })?
+                                .to_string()
+                                .replace('\"', ""),
+                            href: obj
+                                .get("videoId")
+                                .ok_or_else(|| {
+                                    Error::Other(String::from(
+                                        "Parsing Error: Can't find 'videoId'.",
+                                    ))
+                                })?
+                                .to_string()
+                                .replace('\"', ""),
+                        })
                     })
-                } else {
-                    None
-                }
             } else {
                 None
             }
         })
-        .collect::<Vec<YoutubeResult>>())
+        .collect::<NeoResult<Vec<YoutubeResult>>>()
     }
 
     pub async fn play(&mut self, video_id: String) {
@@ -98,9 +114,5 @@ impl YoutubeClient {
 
     pub fn resume(&mut self) {
         self.sink.play();
-    }
-
-    pub fn sleep_until_end(&self) {
-        self.sink.sleep_until_end()
     }
 }
